@@ -1,0 +1,79 @@
+.\" Manpage for gitcheck.
+.\" Useful: "zless /usr/share/man/man1/top.1.gz" and
+.\" http://www.cyberciti.biz/faq/linux-unix-creating-a-manpage/
+
+.\" The date and version appear at the end in normal presentation,
+.\" the rest appears at the top of the man page.
+.TH man 1 "10 August 2015" "0.1" "gitcheck man page"
+.\" ----------------------------------------------------------------------
+.SH NAME
+.\" ----------------------------------------------------------------------
+gitcheck \- check the status of local git repositories
+.\" ----------------------------------------------------------------------
+.SH SYNOPSIS
+.\" ----------------------------------------------------------------------
+gitcheck [-lwrc]
+.\" ----------------------------------------------------------------------
+.SH DESCRIPTION
+.\" ----------------------------------------------------------------------
+gitcheck is a script that checks the status of local git repositories for modifications.  With the \-r option it can check the repository's relation to its remote (singular - it's not smart enough to know about multiple remotes).
+.\" ----------------------------------------------------------------------
+.SH OPTIONS
+.\" ----------------------------------------------------------------------
+.TP
+\fB\-r\fR, \fB\-\-remote\fR
+Check the status of the repository with respect to its remote (if it has one)
+.TP
+\fB\-n\fR, \fB\-\-nocolour\fR
+Output will contain no colours and no escape codes (better for pipes)
+.TP
+\fB\-c\fR, \fB\-\-config\fR
+Generate a new config file to standard out
+.TP
+\fB\-a\fR, \fB\-\-showall\fR
+Show all repositories, including ones that are clean and up to date
+.TP
+\fB\-w\fR, \fB\-\-walk\fR
+Only makes sense with \fB\-c\fR: chooses Python's much slower but more current "walk" as the method to find repositories in ~ (the default if \fB\-w\fR or \fB\-l\fR aren't specified)
+.TP
+\fB\-l\fR, \fB\-\-locate\fR
+Only makes sense with \fB\-c\fR: chooses the much faster but possibly not up-to-date "locate" program as the method to find repositories in ~
+.\" ----------------------------------------------------------------------
+.SH EXIT STATUS
+.\" ----------------------------------------------------------------------
+.TP
+0
+if OK
+.TP
+1
+there is no configuration file or the config is malformed (the program will explain what to do)
+.TP
+2
+if the configuration file is malformed
+.TP
+4
+if both "locate" and "walk" are specified at the same time
+.TP
+8
+if "Fetch" and "Pull" URIs don't match (this program cannot yet deal with that circumstance)
+.\" ----------------------------------------------------------------------
+.SH FILES
+.\" ----------------------------------------------------------------------
+~/.gitcheck.conf
+.\" ----------------------------------------------------------------------
+.SH SEE ALSO
+.\" ----------------------------------------------------------------------
+git(1)
+.\" ----------------------------------------------------------------------
+.SH BUGS
+.\" ----------------------------------------------------------------------
+No known bugs.  Dozens of unknown bugs.
+.\" ----------------------------------------------------------------------
+.SH REPORTING BUGS
+.\" ----------------------------------------------------------------------
+Please report bugs to the author.  Better yet, send a fix.
+.\" ----------------------------------------------------------------------
+.SH AUTHOR
+.\" ----------------------------------------------------------------------
+Giles Orr (gilesorr@gmail.com)
+
