@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """
     Filename: gitcheck
-    Purpose:  Report the current local status (working on remote) of all
-              your git repositories under your home directory.
+    Author:   Giles Orr, gilesorr at gmail dot com
+    Purpose:  Report the current status of your git repositories.  If
+              requested, it can also report their status with respect to
+              their remote.
 
               Includes a way to find and generate a list of repos.
 
@@ -18,28 +20,19 @@ import configparser # for reading in the config
 from distutils.spawn import find_executable # to search for "locate" executable
 import os
 import os.path
-from os.path import expanduser
-from shutil import copyfile
-import subprocess
+from os.path import expanduser # find the user's home directory
+import subprocess # run system commands
 import sys
-import tempfile # not sure I'm still using this?
+import time # how old is the config file?
 
 #####################################################################
 #                            SETTINGS
 #####################################################################
 #
-# These should be in the config file.
-#
-# They're not used yet.  At all.
-#
 # Global variables! (Fair warning):
 
-# Should this executable recommend you update the config file if it's old?
-RECOMMEND_UPDATE = True
-# How old should the file be before the recommendations start?
-# Would be much better in days ...
-# 86400s = 1 day, 604800s = 1 week, 18144000s = 30 days
-RECOMMEND_INTERVAL = 18144000
+# Version:
+VERSION = "0.2"
 
 # http://stackoverflow.com/questions/4028904/how-to-get-the-home-directory-in-python
 # Find the user's home directory (should be OS-neutral?):
@@ -81,7 +74,7 @@ Colours = {
 
 
 #########################################################################
-#                    Default User Colours
+#                    Default User Colours (Global)
 #########################################################################
 #
 # These are defaults (and global!): we'll read in the config and override
@@ -178,7 +171,7 @@ class Gitrepo:
             print("It doesn't know how to deal with git repos where the 'Fetch' and")
             print("'Push' URLs don't match, as in " + self.repodir)
             print("With apologies, bailing out.")
-            sys.exit(8)
+            sys.exit(4)
         return fetch
 
     #####################################################################
@@ -364,6 +357,25 @@ def runcmd(command):
 
 
 #####################################################################
+#                       Unbuffered()
+#####################################################################
+# my remote repos progress indicator needs to print single dots all
+# on the same line, and Python is refusing:
+# http://stackoverflow.com/questions/107705/disable-output-buffering
+
+class Unbuffered(object):
+   def __init__(self, stream):
+       self.stream = stream
+   def write(self, data):
+       self.stream.write(data)
+       self.stream.flush()
+   def __getattr__(self, attr):
+       return getattr(self.stream, attr)
+# and force sys.stdout to be unbuffered:
+sys.stdout = Unbuffered(sys.stdout)
+
+
+#####################################################################
 #            list_walk(): Find git repos with os.walk
 #####################################################################
 
@@ -375,21 +387,6 @@ def list_walk(searchdir):
             if name.endswith(gitmatch):
                 repodirs.append(root + os.sep + name.rstrip(gitmatch))
 
-    return repodirs
-
-
-#####################################################################
-#            list_locate(): Find git repos with locate
-#####################################################################
-
-def list_locate(searchdir):
-    gitmatch = ".git/HEAD"
-    repodirs = []
-    #   "locate --regex '/.git/HEAD' | grep '/home/user/'"
-    output = runcmd("locate --regex " + gitmatch)
-    for line in output.splitlines():
-        if line.startswith(searchdir):
-            repodirs.append(line.rsplit(gitmatch, 1)[0])
     return repodirs
 
 
@@ -442,20 +439,27 @@ def is_repo(foldername):
 #                          mk_config()
 #####################################################################
 
-def mk_config(method):
+def mk_config():
     """
-    Given a method ("locate" or "walk") for locating git repositories,
-    creates a configuration file and writes it to stdout.
+    Creates a configuration file and writes it to stdout.
 
-    A Mac user recommended "mdfind" on Mac: in theory it would be faster
-    there, but it randomly ignores the majority of dot files making it
-    fairly useless for this.
+    Used to allow a choice of Python's "walk" (the default) and Unix's
+    "locate", but the latter caused problems and didn't particularly help,
+    so that was removed.  A Mac user recommended "mdfind" on Mac: in theory
+    it would be faster there, but it randomly ignores the majority of dot
+    files making it fairly useless for this.
 
     """
 
     # We need "allow_no_value" so we can write comments:
     config = configparser.ConfigParser(allow_no_value = True)
     config.optionxform = str
+
+    config["Defaults"] = {}
+    config.set("Defaults", "# Do you want the program to check if the config is old?")
+    config["Defaults"]["RecommendUpdate"]   = "True"
+    config.set("Defaults", "# How old (days) before the program starts notifying you that the config is old?")
+    config["Defaults"]["RecommendInterval"] = "30"
 
     config["Colours"] = {}
     config.set("Colours", "# Colour choices are:")
@@ -497,10 +501,7 @@ def mk_config(method):
     print("# Looking for git repos: this may take a while.")
     print("")
 
-    if method == "locate":
-        dirlist = list_locate(homedir)
-    else:
-        dirlist = list_walk(homedir)
+    dirlist = list_walk(homedir)
 
     for dir in dirlist:
         config["Repositories"][dir] = "i"
@@ -520,7 +521,7 @@ def read_config(infile):
 
     [ {usercolours}, {repositories} ]
 
-    Where usercolours and "repositories" are UNCHECKED dictionaries, ie.
+    Where "usercolours" and "repositories" are UNCHECKED dictionaries, ie.
     we've read the values in but not confirmed they're usable.
 
     config.items returns [(a, b), (c, d), ...] - a list of two-tuples,
@@ -543,6 +544,33 @@ def read_config(infile):
         print("Problems reading the config file.  It's recommended you regenerate")
         print("the config: run '" + os.path.basename(sys.argv[0]) + " -h' to figure out how.  Exiting.")
         sys.exit(1)
+
+    # time.time() is now, in seconds since the millennium
+    # os.stat(string-filename).st_mtime is the age of the file in seconds
+    # since the millennium.
+    # Age of file in seconds:
+    age_of_file_s = time.time() - os.stat(infile).st_mtime
+
+    try:
+        # Comparison necessary because it comes in as a string ...
+        if config["Defaults"]["RecommendUpdate"] in ["yes", "true", "True"]:
+            check_config_age = True
+        else:
+            check_config_age = False
+    except KeyError: # Occurs if there's no [Defaults] section in the config:
+        # Check it if they didn't set a value:
+        check_config_age = True
+
+    try:
+        check_days = int(config["Defaults"]["RecommendInterval"])
+    except KeyError: # Occurs if there's no [Defaults] section in the config:
+        # set a default value if they didn't set one:
+        check_days = 30
+
+    if check_config_age:
+        if age_of_file_s > (60 * 60 * 24 * check_days):
+            print("** Config file more than " + str(check_days) + " days old: recommended you regenerate your configuration file with '-c'.")
+
 
     for key in config["Colours"]: # the [Colours] section in the config
         usercolours[key] = config["Colours"][key]
@@ -580,11 +608,24 @@ def parse_repos(repo_dict, remotes):
     as opposed to "i" ("ignore").
 
     """
-    repos = [] # list of Gitrepo() objects
+    status_repos = [] # list of folder names (strings) that the user wants checked
+    repos = [] # list of Gitrepo() objects to return
     for key in repo_dict:
         if not repo_dict[key] == "i":
-            repos.append(Gitrepo(key, remotes))
+            status_repos.append(key)
+    if remotes: # tell them how many remote repos to check
+        print(str(len(status_repos)) + " remote repos to check: ", end="")
+    for repo in status_repos:
+        repos.append(Gitrepo(repo, remotes))
+        if remotes: # let the user know how it's progressing
+            print(".", end="")
+    if remotes:
+        print("") # terminate the status update line
     return repos
+
+
+def show_version():
+    print(os.path.basename(sys.argv[0]) + " version " + str(VERSION))
 
 
 #####################################################################
@@ -596,34 +637,23 @@ def parse_repos(repo_dict, remotes):
 if __name__ == '__main__':
 
     # OPTIONS!
-    parser = argparse.ArgumentParser()
-    parser.add_argument("-l", "--locate", action="store_true", help="use shell 'locate' command to find git repos (fast, may be up to 24 hours out of date)")
-    parser.add_argument("-w", "--walk",   action="store_true", help="use Python's os.walk to find git repos (the default: slow but more accurate)")
+    parser = argparse.ArgumentParser(description="Check the status of local git repositories.")
     parser.add_argument("-r", "--remote", action="store_true", help="check repository status with respect to remotes (if they exist)")
     parser.add_argument("-c", "--config", action="store_true", help="generate a new config file to standard out")
     parser.add_argument("-n", "--nocolours", action="store_true", help="disable all colours in the output")
     parser.add_argument("-a", "--showall", action="store_true", help="shows all repositories, even if they're clean and up to date")
+    parser.add_argument("-v", "--version", action="store_true", help="shows the current version of the script")
     args = parser.parse_args()
 
-    if (args.locate and args.walk):
-        print("The 'locate' and 'os.walk' options are exclusive.  Please choose one.")
-        sys.exit(4)
+    if args.version:
+        show_version()
+        sys.exit(0)
 
     dirlist = []
-    # default method of locating repositories:
-    method = "walk"
-    if args.locate:
-        if find_executable("locate"):
-            method = "locate"
-        else:
-            print("# Unable to find a 'locate' executable on the path, using Python's 'walk'")
-    if args.walk:
-        method = "walk"
-
     conffile = homedir + os.sep + "." + os.path.basename(sys.argv[0]) + ".conf"
 
     if args.config:
-        mk_config(method)
+        mk_config()
         # don't do anything else if this option is selected:
         sys.exit(0)
 
