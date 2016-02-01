@@ -4,34 +4,49 @@
 
 .\" The date and version appear at the end in normal presentation,
 .\" the rest appears at the top of the man page.
-.TH man 1 "17 August 2015" "0.2" "gitcheck man page"
+
+.\" String register, accessed with \*(EN (Executable Name)
+.ds EN \fBgitcheck\fR
+.ds En gitcheck
+.\" Stole the EN / En difference from the top man page, but what's the
+.\" practical difference?
+
+.TH man 1 "31 January 2016" "0.3" "\*(En man page"
 .\" ----------------------------------------------------------------------
 .SH NAME
 .\" ----------------------------------------------------------------------
-gitcheck \- check the status of local git repositories
+\*(EN \- check the status of local git repositories
 .\" ----------------------------------------------------------------------
 .SH SYNOPSIS
 .\" ----------------------------------------------------------------------
-gitcheck [-rncav]
+\*(En [-rnav] [-c PATH]
 .\" ----------------------------------------------------------------------
 .SH DESCRIPTION
 .\" ----------------------------------------------------------------------
-gitcheck is a script that checks the status of local git repositories for modifications.  With the \-r option it can check each repository's relation to its remote (singular - it's not smart enough to know about multiple remotes).
+\*(En is a script that checks the status of local git repositories for modifications.  With the \-r option it can check each repository's relation to its remote (singular - it's not smart enough to know about multiple remotes).
 .\" ----------------------------------------------------------------------
 .SH OPTIONS
 .\" ----------------------------------------------------------------------
 .TP
 \fB\-r\fR, \fB\-\-remote\fR
-Check the status of each repository with respect to its remote (if it has one)
+Check the status of each repository with respect to its remote, if it has one (default is not to check remotes)
 .TP
 \fB\-n\fR, \fB\-\-nocolour\fR
-Output will contain no colours and no escape codes (better for pipes)
-.TP
-\fB\-c\fR, \fB\-\-config\fR
-Generate a new config file to standard out
+Output will contain no colours and no escape codes - better for pipes (default is to colourize output)
 .TP
 \fB\-a\fR, \fB\-\-showall\fR
-Show all repositories, including ones that are clean and up to date
+Show all repositories, including ones that are clean and up to date (default is to only repositories with changes)
+.TP
+\fB\-c\fR, \fB\-\-config PATH\fR
+Generate a new config file to standard out by looking for repositories on PATH, where PATH is a standard colon-separated Unix Path variable, ex.:
+
+    \*(En -c ~ > ~/.\*(En.conf
+
+    Or
+
+    \*(En -c '/opt/:/home/linux' > tmp.txt
+
+This can be very slow depending on the size of the directory tree it's asked to crawl.
 .TP
 \fB\-v\fR, \fB\-\-version\fR
 Show the version number of the program
@@ -50,10 +65,17 @@ if the configuration file is malformed
 .TP
 4
 if "Fetch" and "Pull" URIs don't match (this program cannot yet deal with that circumstance)
+.TP
+8
+User interrupt (usually Ctrl-C)
+.TP
+16
+When trying to generate a config file, no valid directories were found in
+the user-provided path
 .\" ----------------------------------------------------------------------
 .SH FILES
 .\" ----------------------------------------------------------------------
-~/.gitcheck.conf
+~/.\*(En.conf
 .\" ----------------------------------------------------------------------
 .SH SEE ALSO
 .\" ----------------------------------------------------------------------
@@ -61,7 +83,7 @@ git(1)
 .\" ----------------------------------------------------------------------
 .SH BUGS
 .\" ----------------------------------------------------------------------
-No known bugs.  Dozens of unknown bugs.
+Regenerating the config file will wipe all comments from the config.  This is a limitation of Python's configparser().  The recommended work-around is not to directly overwrite your current config, but to write the new config to a separate file and edit new repositories into the old config.
 .\" ----------------------------------------------------------------------
 .SH REPORTING BUGS
 .\" ----------------------------------------------------------------------

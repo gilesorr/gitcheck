@@ -24,6 +24,7 @@ from os.path import expanduser # find the user's home directory
 import subprocess # run system commands
 import sys
 import time # how old is the config file?
+import datetime # for datestamp
 
 #####################################################################
 #                            SETTINGS
@@ -32,12 +33,24 @@ import time # how old is the config file?
 # Global variables! (Fair warning):
 
 # Version:
-VERSION = "0.2"
+VERSION = "0.3"
+VERSIONDATE = "2016"
+URL = "https://github.com/gilesorr/gitcheck"
+AUTHORS = "Giles Orr"
 
 # http://stackoverflow.com/questions/4028904/how-to-get-the-home-directory-in-python
 # Find the user's home directory (should be OS-neutral?):
 homedir = expanduser("~")
 
+# Set a (global) directory separator (one of the few parts of this that
+# might work cross-platform):
+DIRSEP=os.pathsep
+
+# Set timestamp and datestamp:
+DATEFORMAT = "%Y-%m-%d"
+TIMEFORMAT = "%H%M.%S"
+DATESTAMP  = datetime.datetime.now().strftime(DATEFORMAT)
+TIMESTAMP  = datetime.datetime.now().strftime(TIMEFORMAT)
 
 #########################################################################
 #                    Default (Global) Colours
@@ -124,10 +137,11 @@ class Gitrepo:
         self.local_status  = []
         self.remote_status = []
         self.remote_uri    = []
-        self.remotes_bool  = remotes_bool
-        self.branch        = ""
-        self.branches      = []
+        self.remotes_bool  = remotes_bool # check for remotes?
+        self.branch        = ""   # current branch in the repo
+        self.branches      = []   # all the branches in the repo
         self.clean         = True # ANY status not "clean" and "up to date" should toggle this
+        self.upstream_name = ""   # it's not always "origin", let's check
 
         # Check if the repo exists (after empty values are set: makes
         # failure more graceful):
@@ -135,37 +149,44 @@ class Gitrepo:
             self.is_repo = False
             self.local_status.insert(0, "not a repository")
             return None
-        self.branch = current_branch_name(self.repodir)
+        self.set_upstream_name()
+        self.set_branches()
+        self.branch = self.branches[0]
         self.set_local_status()
         if remotes_bool:
-            self.remote_uri = self.check_endpoint()
+            self.remote_uri = self.check_remotes_match()
             self.set_remote_status()
 
+
     #####################################################################
-    #                    Gitrepo.check_endpoint()
+    #                    Gitrepo.check_remotes_match()
     #####################################################################
 
-    def check_endpoint(self):
+    def check_remotes_match(self):
         """
-        Badly named: check to see if the Fetch and Push URLs for the
-        repo are the same - and bow out if they aren't.  Return the endpoint
-        if they match.
+        Check to see if the fetch and push URLs for the repo are the same -
+        and bow out if they aren't.  Return the remote if they match.
 
-        Untested because I have no repos with unmatched endpoints.
+        Originally used "git remote show origin", now switched to
+        "git remote -v" as the information we need is in both and the latter
+        doesn't require a network connection, making it faster if the local
+        network is being sticky.
+
+        Untested because I have no repos with unmatched remotes.
         """
         os.chdir(self.repodir)
         output = runcmd("git remote")
         if output == "":
             # There is no remote - and we're okay with that:
             return
-        output = runcmd("git remote show origin")
+        output = runcmd("git remote -v")
         fetch = ""
         push  = ""
         for line in output.splitlines():
-            if "Fetch URL:" in line:
-                fetch = line.split()[2]
-            if "Push  URL:" in line: # note problematic extra space ...
-                push  = line.split()[2]
+            if "(fetch)" in line:
+                fetch = line.split()[1]
+            if "(push)"  in line:
+                push  = line.split()[1]
         if fetch != push:
             print("This program was written for a very limited set of circumstances.")
             print("It doesn't know how to deal with git repos where the 'Fetch' and")
@@ -173,6 +194,7 @@ class Gitrepo:
             print("With apologies, bailing out.")
             sys.exit(4)
         return fetch
+
 
     #####################################################################
     #                    Gitrepo.set_local_status()
@@ -240,23 +262,29 @@ class Gitrepo:
             self.remote_status.append("no remote")
         else:
             if self.remotes_bool: # user has requested we check for remotes:
-                output = runcmd("git remote show origin")
+                output = runcmd("git remote show " + self.upstream_name)
                 for line in output.splitlines():
                     if "does not appear to be a git repository" in line and "no remote" not in self.remote_status:
                         self.remote_status.append("no remote")
                         # done, there should be nothing else:
                         continue
-                    if "local out of date" in line and "behind" not in self.remote_status:
-                        # local repo is behind the remote
-                        self.remote_status.append("behind")
-                        self.clean = False
-                    if "fast-forwardable" in line and "ahead" not in self.remote_status:
-                        # local repo is ahead of the remote
-                        self.remote_status.append("ahead")
-                        self.clean = False
-                    if "up to date" in line and "up to date" not in self.remote_status:
-                        # no local or remote changes:
-                        self.remote_status.append( "up to date")
+
+                    # I looked at RE matching for this test, but none of
+                    # "\b", "\W", or "\s" was exactly what was needed: this
+                    # is simpler, faster, and - amazingly - better:
+                    if self.branch in line and line.split()[0].strip() in self.branch:
+                        if "local out of date" in line and "behind" not in self.remote_status:
+                            # local repo is behind the remote
+                            self.remote_status.append("behind")
+                            self.clean = False
+                        if "fast-forwardable" in line and "ahead" not in self.remote_status:
+                            # local repo is ahead of the remote
+                            self.remote_status.append("ahead")
+                            self.clean = False
+                        if "up to date" in line and "up to date" not in self.remote_status:
+                            # no local or remote changes:
+                            self.remote_status.append( "up to date")
+
 
     #####################################################################
     #                  Gitrepo.display_local_status():
@@ -283,7 +311,50 @@ class Gitrepo:
             if status is "conflicted":
                 output += User_Colours["CONFLICT"] + status + Colours["endcolours"] + " "
         output = output.strip()
-        print("[ " + output + " ]")
+        print("[ " + output + " ]", end="")
+
+
+    #####################################################################
+    #                       Gitrepo.set_branches():
+    #####################################################################
+
+    def set_branches(self):
+        """
+        self.branches is an array.  This sets that array.  One important
+        bit of behaviour, item 0 should be the current branch.
+        """
+        branches = []
+        os.chdir(self.repodir)
+        output = runcmd("git branch")
+        for line in output.splitlines():
+            if line.startswith('*'):
+                # Current branch (make it the first item in the list):
+                branches.insert(0, line.split()[1])
+            else:
+                # non-current branch:
+                branches.append(line.strip())
+        self.branches = branches
+
+
+    #####################################################################
+    #                       Gitrepo.set_upstream_name():
+    #####################################################################
+
+    def set_upstream_name(self):
+        """
+        Given the object's repo, determine what the upstream's name is.
+        This is almost always "origin", but of course it's unsafe to
+        assume that.  Sets self.upstream_name to the discovered value.
+        """
+        os.chdir(self.repodir)
+        output = runcmd("git remote -v")
+        if output == "":
+            # There is no remote
+            pass # self.upstream_name will remain as the default ""
+        else:
+            firstline = output.splitlines()[0]
+            self.upstream_name = firstline.split()[0]
+
 
     #####################################################################
     #                  Gitrepo.display_remote_status():
@@ -310,7 +381,7 @@ class Gitrepo:
             if "up" in status and "to" in status and "date" in status:
                 output += User_Colours["UPTODATE"] + status + Colours["endcolours"] + " "
         output = output.strip()
-        print("[ " + output + " ]")
+        print("[ " + output + " ]", end="")
 
     #####################################################################
     #                  Gitrepo.__repr__():
@@ -391,33 +462,6 @@ def list_walk(searchdir):
 
 
 #####################################################################
-#   branch_names(): given repo, return list of branch names
-#####################################################################
-# The current branch name is item [0]
-
-def branch_names(repodir):
-    branches = []
-    os.chdir(repodir)
-    output = runcmd("git branch")
-    for line in output.splitlines():
-        if line.startswith('*'):
-            # Current branch (make it the first item in the list):
-            branches.insert(0, line.split()[1])
-        else:
-            # non-current branch:
-            branches.append(line.strip())
-    return branches
-
-
-#####################################################################
-#   current_branch_name(): given repo, return current branch name
-#####################################################################
-
-def current_branch_name(repodir):
-    return branch_names(repodir)[0]
-
-
-#####################################################################
 #                         is_repo()
 #####################################################################
 
@@ -436,19 +480,17 @@ def is_repo(foldername):
 
 
 #####################################################################
-#                          mk_config()
+#                    new_config_defaults()
 #####################################################################
 
-def mk_config():
+def new_config_defaults():
     """
-    Creates a configuration file and writes it to stdout.
+    Used when no config file exists and a default configuration set-up
+    is needed.
 
-    Used to allow a choice of Python's "walk" (the default) and Unix's
-    "locate", but the latter caused problems and didn't particularly help,
-    so that was removed.  A Mac user recommended "mdfind" on Mac: in theory
-    it would be faster there, but it randomly ignores the majority of dot
-    files making it fairly useless for this.
-
+    Returns a config object, pre-loaded with colours and comments.
+    The "Repositories" section is created and loaded with comments, but
+    no actual repos.
     """
 
     # We need "allow_no_value" so we can write comments:
@@ -456,6 +498,7 @@ def mk_config():
     config.optionxform = str
 
     config["Defaults"] = {}
+    config.set("Defaults", "# WARNING! If you re-run the config generator, all comments will be wiped.")
     config.set("Defaults", "# Do you want the program to check if the config is old?")
     config["Defaults"]["RecommendUpdate"]   = "True"
     config.set("Defaults", "# How old (days) before the program starts notifying you that the config is old?")
@@ -498,15 +541,135 @@ def mk_config():
     config.set("Repositories", "#   i - ignore")
     config.set("Repositories", "#   s - status")
 
+    return config
+
+
+#####################################################################
+#                          mk_config()
+#####################################################################
+
+def mk_config(path, infile):
+    """
+    Creates a configuration file and writes it to stdout.
+
+    Used to allow a choice of Python's "walk" (the default) and Unix's
+    "locate", but the latter caused problems and didn't particularly help,
+    so that was removed.  A Mac user recommended "mdfind" on Mac: in theory
+    it would be faster there, but it randomly ignores the majority of dot
+    files making it fairly useless for this.
+
+    KNOWN ISSUE/TODO: if a config exists, configparser won't keep comments -
+    it effectively purges them.  Possible solutions:
+    - change config handler (non-default, would have to be downloaded)
+    - re-insert comments (they would clump at section beginnings or ends)
+    - back up configs each time this is run (could clutter user dirs)
+
+    """
+
+    # dirlistparse(...) removes duplicates and checks validity of the path
+    # dirs supplied by the user, returning the shortest valid path:
+    validated_user_dir_list = dirlistparse(path)
+    if not validated_user_dir_list: # empty list returned
+        print("Something is wrong with your provided PATH, no valid directories")
+        print("found to search.")
+        sys.exit(16)
+
     print("# Looking for git repos: this may take a while.")
     print("")
 
-    dirlist = list_walk(homedir)
+    gitdirlist = [] # list of valid git directories found
+    for dir in (validated_user_dir_list):
+        # list_walk(dir) recursively finds git directories in a given
+        # directory:
+        gitdirlist += list_walk(dir)
 
-    for dir in dirlist:
+    if os.path.isfile(infile):
+        # duplicating a few lines from read_config:
+        # TODO: refactor so read_config ONLY reads the config, doesn't
+        # parse it: that should be handled separately.
+        repositories = OrderedDict()
+        config = configparser.ConfigParser(allow_no_value = True)
+        config.optionxform = str
+        try:
+            config.read(infile)
+        except:
+            # if we can't read the file, set defaults:
+            config = new_config_defaults() # sets colours, comments, empty Repo section
+
+        known_repos = []
+        try:
+            for key in config["Repositories"]:
+                known_repos.append(key)
+            # apparently the efficiency of "in" isn't great, but to beat that
+            # I'd need to convert to sets ... and then convert back.  Not worth
+            # it if we're not hitting thousands of repos:
+            new_repos = [ repo for repo in gitdirlist if repo not in known_repos]
+            if new_repos: # ie. the list isn't empty
+                update_string = "# New repos found " + DATESTAMP + ":"
+                config.set("Repositories", update_string)
+            else:
+                update_string = "# No new repos found " + DATESTAMP
+                config.set("Repositories", update_string)
+        except: # we have a mangled config file
+            config = new_config_defaults() # sets colours, comments, empty Repo section
+            new_repos = gitdirlist
+    else:
+        config = new_config_defaults() # sets colours, comments, empty Repo section
+        new_repos = gitdirlist
+
+    for dir in new_repos:
         config["Repositories"][dir] = "i"
 
     config.write(sys.stdout)
+
+
+#####################################################################
+#                      dirlistparse
+#####################################################################
+
+def dirlistparse(dirstring):
+    """
+    Given a Unix-PATH-like string of colon-separated directories, returns
+    a list of valid directories:
+    - disambiguates softlinks
+    - eliminates dirs that are subdirs of other named entries
+    - eliminates entries that don't exist
+    """
+
+    baselist = dirstring.split(DIRSEP)
+    expandlist = []
+    for maybedir in baselist:
+        testdir = os.path.realpath(os.path.expanduser(maybedir.rstrip("/")))
+        if os.path.isdir(testdir):
+            if not expandlist: # ie. the list is empty:
+                expandlist.append(os.path.expanduser(maybedir.rstrip("/")))
+            # don't want to be looping and modifying a list at the same time:
+            copylist = expandlist.copy()
+            add = True
+            for prevdir in copylist:
+                # Check that a subdir of this dir isn't already on the list
+                # - and that this isn't a subdir of something already on
+                # the list.
+                #
+                # Since I'm pulling up the names supplied by the user, I
+                # also have to expand them again:
+                prevdir = os.path.realpath(prevdir)
+                if testdir == prevdir:
+                    # Already on the list:
+                    add = False
+                elif testdir.find(prevdir) == 0:
+                    # don't add testdir, because prevdir is a parent:
+                    add = False
+                elif prevdir.find(testdir) == 0:
+                    # remove prevdir and add testdir because prevdir is a subdir:
+                    expandlist.remove(prevdir)
+                    # retain the name they used, but with "~" expanded:
+                    add = True
+            if add:
+                expandlist.append(os.path.expanduser(maybedir.rstrip("/")))
+        else:
+            print("'" + maybedir + "' doesn't appear to be a valid directory and won't be used.")
+    return expandlist
 
 
 #####################################################################
@@ -516,8 +679,8 @@ def mk_config():
 def read_config(infile):
     """
     Given the location of the configuration file, create and return
-    a list of dictionaries, each dictionary being one of the sections
-    in the config file:
+    a list of ordered dictionaries, each dictionary being one of the
+    sections in the config file:
 
     [ {usercolours}, {repositories} ]
 
@@ -527,6 +690,11 @@ def read_config(infile):
     config.items returns [(a, b), (c, d), ...] - a list of two-tuples,
     not a dictionary, which would have been sane.  Although it is
     "dictionary-like".  So I have to convert from that form to dictionary.
+
+    "repositories" has each element of the form ('/home/giles/.vim/', 's'),
+    ie. two-tuples when I meant them to be a dict.  "usercolours" is an
+    actual dict, with elements like this:
+    {'REPO': 'nocolour', 'AHEAD': 'pink', 'BRANCH': 'nocolour', etc.}
 
     configparser defaults to lower-casing all key values.  As I'm reading
     in directory names, we needed a fix: so "config.optionxform = str".
@@ -569,7 +737,7 @@ def read_config(infile):
 
     if check_config_age:
         if age_of_file_s > (60 * 60 * 24 * check_days):
-            print("** Config file more than " + str(check_days) + " days old: recommended you regenerate your configuration file with '-c'.")
+            print("** Config file more than " + str(check_days) + " days old: recommended you regenerate your configuration file with '-c PATH'.")
 
 
     for key in config["Colours"]: # the [Colours] section in the config
@@ -624,8 +792,14 @@ def parse_repos(repo_dict, remotes):
     return repos
 
 
+#####################################################################
+#                       show_version()
+#####################################################################
+
 def show_version():
-    print(os.path.basename(sys.argv[0]) + " version " + str(VERSION))
+    print(os.path.basename(sys.argv[0]) + " version " + str(VERSION) + ", " + str(VERSIONDATE))
+    print(str(URL))
+    print("by " + str(AUTHORS))
 
 
 #####################################################################
@@ -639,7 +813,12 @@ if __name__ == '__main__':
     # OPTIONS!
     parser = argparse.ArgumentParser(description="Check the status of local git repositories.")
     parser.add_argument("-r", "--remote", action="store_true", help="check repository status with respect to remotes (if they exist)")
-    parser.add_argument("-c", "--config", action="store_true", help="generate a new config file to standard out")
+    # "metavar" required to force a name on the param, otherwise argparse
+    # calls it "CONFIG" - thanks stackoverflow!
+    parser.add_argument("-c", "--config",
+            help="Generate a config file to standard out: provide a Unix-style colon-separated PATH, ie. '~' or '/opt/:/home/linux'.  Read 'Known Issues' in the README before overwriting an existing config file.",
+            nargs=1,
+            metavar=("PATH"))
     parser.add_argument("-n", "--nocolours", action="store_true", help="disable all colours in the output")
     parser.add_argument("-a", "--showall", action="store_true", help="shows all repositories, even if they're clean and up to date")
     parser.add_argument("-v", "--version", action="store_true", help="shows the current version of the script")
@@ -653,7 +832,7 @@ if __name__ == '__main__':
     conffile = homedir + os.sep + "." + os.path.basename(sys.argv[0]) + ".conf"
 
     if args.config:
-        mk_config()
+        mk_config(args.config[0], conffile)
         # don't do anything else if this option is selected:
         sys.exit(0)
 
@@ -664,11 +843,17 @@ if __name__ == '__main__':
         set_usercolours(config_colours)
         # got the repo list, strip it down to those we'll check (we send
         # in a dictionary, get a list of Gitrepos() out):
-        repos = parse_repos(config_repos, args.remote)
+        try:
+            repos = parse_repos(config_repos, args.remote)
+        except KeyboardInterrupt:
+            # likeliest point at which the process will be interrupted by a
+            # Ctrl-C.  Catch and exit cleanly.
+            print("")
+            sys.exit(8)
     else:
         print("Cannot find configuration file " + conffile + " .")
         print("Generate it with:")
-        print("    " + sys.argv[0] + " -c [-l] [-w] > " + conffile)
+        print("    " + sys.argv[0] + " -c PATH > " + conffile)
         print("Then edit the file according to the directions inside it.")
         sys.exit(1)
 
@@ -684,10 +869,10 @@ if __name__ == '__main__':
             print(User_Colours["REPO"] + repo.get_repo_dir() + Colours["endcolours"], end=" ")
             if repo.is_repo:
                 print("branch:" + User_Colours["BRANCH"] +repo.get_current_branch() + Colours["endcolours"] + " ", end=" ")
-            # this prints warning if it's not a repo, so always run it:
-            repo.display_local_status()
             if args.remote:
                 if repo.is_repo:
-                    print("    ", end=" ")
                     repo.display_remote_status()
+            # this prints warning if it's not a repo, so always run it:
+            repo.display_local_status()
+            print("")
 
